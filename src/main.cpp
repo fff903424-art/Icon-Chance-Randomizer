@@ -8,11 +8,15 @@
 
 #include <algorithm>
 #include <charconv>
+#include <cctype>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
+#include <limits>
 #include <random>
 #include <string>
+#include <string_view>
+#include <utility>
 #include <vector>
 
 using namespace geode::prelude;
@@ -26,31 +30,72 @@ struct PoolEntry {
         Custom
     };
 
-    Kind kind;
-    int id = 0;
+    Kind kind = Kind::Vanilla;
+    int id = 1;
     std::string name;
-    double weight = 0.0;
+    double weight = 1.0;
 };
 
-struct SelectorRow {
-    bool custom = false;
-    int index = 0;
-    TextInput* chance = nullptr;
-    CCLabelBMFont* selected = nullptr;
-    CCMenuItemSpriteExtra* typeButton = nullptr;
-};
+std::string trim(std::string value) {
+    auto isSpace = [](unsigned char c) {
+        return std::isspace(c) != 0;
+    };
 
-bool parseWeight(std::string const& text, double& out) {
-    if (text.empty())
+    value.erase(
+        value.begin(),
+        std::find_if(
+            value.begin(),
+            value.end(),
+            [&](char c) {
+                return !isSpace(static_cast<unsigned char>(c));
+            }
+        )
+    );
+
+    value.erase(
+        std::find_if(
+            value.rbegin(),
+            value.rend(),
+            [&](char c) {
+                return !isSpace(static_cast<unsigned char>(c));
+            }
+        ).base(),
+        value.end()
+    );
+
+    return value;
+}
+
+bool parseInt(std::string_view text, int& out) {
+    if (text.empty()) {
         return false;
+    }
+
+    auto result = std::from_chars(
+        text.data(),
+        text.data() + text.size(),
+        out
+    );
+
+    return result.ec == std::errc{} &&
+           result.ptr == text.data() + text.size();
+}
+
+bool parseWeight(std::string_view text, double& out) {
+    std::string owned(text);
+
+    if (owned.empty()) {
+        return false;
+    }
 
     char* end = nullptr;
-    out = std::strtod(text.c_str(), &end);
 
-    return end != text.c_str()
-        && *end == '\0'
-        && std::isfinite(out)
-        && out > 0.0;
+    out = std::strtod(owned.c_str(), &end);
+
+    return end != owned.c_str() &&
+           *end == '\0' &&
+           std::isfinite(out) &&
+           out > 0.0;
 }
 
 std::vector<PoolEntry> parsePool(std::string const& raw) {
@@ -61,64 +106,90 @@ std::vector<PoolEntry> parsePool(std::string const& raw) {
     while (start <= raw.size()) {
         auto comma = raw.find(',', start);
 
-        auto token = raw.substr(
-            start,
-            comma == std::string::npos
-                ? std::string::npos
-                : comma - start
+        auto token = trim(
+            raw.substr(
+                start,
+                comma == std::string::npos
+                    ? std::string::npos
+                    : comma - start
+            )
         );
 
         if (!token.empty()) {
             auto equals = token.rfind('=');
 
-            if (equals != std::string::npos) {
-                auto left = token.substr(0, equals);
-                auto weightText = token.substr(equals + 1);
+            if (equals == std::string::npos) {
+                log::warn(
+                    "ICR: ignored '{}': missing '='",
+                    token
+                );
+            }
+            else {
+                auto left = trim(token.substr(0, equals));
+                auto weightText = trim(token.substr(equals + 1));
 
                 double weight = 0.0;
 
-                if (parseWeight(weightText, weight)) {
-                    if (left.rfind("vanilla:", 0) == 0) {
-                        int id = 0;
-                        auto idText = left.substr(8);
+                if (!parseWeight(weightText, weight)) {
+                    log::warn(
+                        "ICR: ignored '{}': invalid weight",
+                        token
+                    );
+                }
+                else if (left.rfind("vanilla:", 0) == 0) {
+                    int id = 0;
 
-                        auto parsed = std::from_chars(
-                            idText.data(),
-                            idText.data() + idText.size(),
-                            id
+                    auto idText = trim(left.substr(8));
+
+                    if (!parseInt(idText, id) || id <= 0) {
+                        log::warn(
+                            "ICR: ignored '{}': invalid vanilla cube ID",
+                            token
                         );
-
-                        if (
-                            parsed.ec == std::errc{} &&
-                            parsed.ptr == idText.data() + idText.size() &&
-                            id > 0
-                        ) {
-                            result.push_back({
+                    }
+                    else {
+                        result.push_back(
+                            PoolEntry{
                                 PoolEntry::Kind::Vanilla,
                                 id,
                                 {},
                                 weight
-                            });
-                        }
+                            }
+                        );
                     }
-                    else if (left.rfind("custom:", 0) == 0) {
-                        auto name = left.substr(7);
+                }
+                else if (left.rfind("custom:", 0) == 0) {
+                    auto name = trim(left.substr(7));
 
-                        if (!name.empty()) {
-                            result.push_back({
+                    if (name.empty()) {
+                        log::warn(
+                            "ICR: ignored '{}': empty More Icons name",
+                            token
+                        );
+                    }
+                    else {
+                        result.push_back(
+                            PoolEntry{
                                 PoolEntry::Kind::Custom,
                                 0,
-                                name,
+                                std::move(name),
                                 weight
-                            });
-                        }
+                            }
+                        );
                     }
+                }
+                else {
+                    log::warn(
+                        "ICR: ignored '{}': use vanilla:ID or custom:NAME",
+                        token
+                    );
                 }
             }
         }
 
-        if (comma == std::string::npos)
+        if (comma == std::string::npos) {
             break;
+        }
 
         start = comma + 1;
     }
@@ -131,8 +202,10 @@ bool enabled() {
 }
 
 void applyEntry(PoolEntry const& entry) {
+    auto gm = GameManager::get();
+
     if (entry.kind == PoolEntry::Kind::Vanilla) {
-        GameManager::get()->setPlayerFrame(entry.id);
+        gm->setPlayerFrame(entry.id);
 
         if (Mod::get()->getSettingValue<bool>("debug")) {
             log::info(
@@ -154,6 +227,7 @@ void applyEntry(PoolEntry const& entry) {
             "ICR: More Icons cube '{}' was not found",
             entry.name
         );
+
         return;
     }
 
@@ -171,52 +245,66 @@ void applyEntry(PoolEntry const& entry) {
 }
 
 void randomize() {
-    if (!enabled())
+    if (!enabled()) {
         return;
+    }
 
-    auto pool =
+    auto raw =
         Mod::get()->getSettingValue<std::string>("pool");
 
-    auto parsed = parsePool(pool);
+    auto parsed = parsePool(raw);
 
     if (parsed.empty()) {
         log::warn(
-            "ICR: no valid icons in pool"
+            "ICR: pool is empty or contains no valid entries"
         );
+
         return;
     }
 
     std::vector<PoolEntry const*> valid;
     std::vector<double> weights;
 
+    valid.reserve(parsed.size());
+    weights.reserve(parsed.size());
+
     for (auto const& entry : parsed) {
-        if (entry.kind == PoolEntry::Kind::Custom) {
-            if (!more_icons::getIcon(
+        if (
+            entry.kind == PoolEntry::Kind::Custom &&
+            !more_icons::getIcon(
                 entry.name,
                 IconType::Cube
-            )) {
-                continue;
-            }
+            )
+        ) {
+            log::warn(
+                "ICR: skipping missing More Icons cube '{}'",
+                entry.name
+            );
+
+            continue;
         }
 
         valid.push_back(&entry);
         weights.push_back(entry.weight);
     }
 
-    if (valid.empty())
+    if (valid.empty()) {
+        log::warn(
+            "ICR: no usable entries remain in the pool"
+        );
+
         return;
+    }
 
     static std::random_device rd;
     static std::mt19937_64 rng(rd());
 
-    std::discrete_distribution<std::size_t> distribution(
+    std::discrete_distribution<std::size_t> dist(
         weights.begin(),
         weights.end()
     );
 
-    applyEntry(
-        *valid[distribution(rng)]
-    );
+    applyEntry(*valid[dist(rng)]);
 }
 
 void savePool(std::string const& pool) {
@@ -226,178 +314,345 @@ void savePool(std::string const& pool) {
     );
 }
 
+std::vector<std::string> getMoreIconsCubes() {
+    std::vector<std::string> result;
+
+    auto* icons = more_icons::getIcons(
+        IconType::Cube
+    );
+
+    if (!icons) {
+        return result;
+    }
+
+    result.reserve(icons->size());
+
+    for (auto const& icon : *icons) {
+        result.push_back(icon.getName());
+    }
+
+    return result;
+}
+
 } // namespace icr
 
 
+struct SelectorRow {
+    bool custom = false;
+    std::size_t index = 0;
+
+    CCLabelBMFont* selected = nullptr;
+    CCMenuItemSpriteExtra* typeButton = nullptr;
+    TextInput* chance = nullptr;
+
+    std::vector<std::string> customNames;
+};
+
+
 class CubeChancePopup final : public geode::Popup {
-    std::vector<icr::SelectorRow> m_rows;
 
-    std::vector<icr::PoolEntry> m_existing;
+protected:
+    std::vector<SelectorRow> m_rows;
 
-    static constexpr int ROW_COUNT = 5;
+    bool setup(std::string const&) {
+        this->setTitle("Cube Chances");
 
-    int vanillaCount() const {
-        return 50;
-    }
-
-    std::vector<std::string> getCustomNames() const {
-        std::vector<std::string> names;
-
-        auto* icons =
-            more_icons::getIcons(
-                IconType::Cube
-            );
-
-        if (!icons)
-            return names;
-
-        for (auto const& icon : *icons) {
-            auto name = icon.getName();
-
-            if (!name.empty())
-                names.push_back(name);
-        }
-
-        return names;
-    }
-
-    double findWeight(
-        bool custom,
-        int index
-    ) {
-        if (custom) {
-            auto names = getCustomNames();
-
-            if (
-                index < 0 ||
-                index >= static_cast<int>(names.size())
-            ) {
-                return 0.0;
-            }
-
-            auto const& name = names[index];
-
-            for (auto const& entry : m_existing) {
-                if (
-                    entry.kind ==
-                    icr::PoolEntry::Kind::Custom &&
-                    entry.name == name
-                ) {
-                    return entry.weight;
-                }
-            }
-
-            return 0.0;
-        }
-
-        int id = index + 1;
-
-        for (auto const& entry : m_existing) {
-            if (
-                entry.kind ==
-                icr::PoolEntry::Kind::Vanilla &&
-                entry.id == id
-            ) {
-                return entry.weight;
-            }
-        }
-
-        return 0.0;
-    }
-
-    void setChanceText(
-        TextInput* input,
-        double weight
-    ) {
-        if (weight <= 0.0) {
-            input->setString(
-                "0",
-                false
-            );
-            return;
-        }
-
-        char buffer[32];
-
-        std::snprintf(
-            buffer,
-            sizeof(buffer),
-            "%.4g",
-            weight
+        auto description = CCLabelBMFont::create(
+            "Choose an icon and give it a chance weight.",
+            "goldFont.fnt"
         );
 
-        input->setString(
-            buffer,
+        description->setScale(0.42f);
+
+        m_mainLayer->addChildAtPosition(
+            description,
+            Anchor::Top,
+            ccp(0.f, -28.f)
+        );
+
+        for (int i = 0; i < 5; ++i) {
+            createRow(i);
+        }
+
+        auto saveSprite = ButtonSprite::create(
+            "Save"
+        );
+
+        auto saveButton =
+            CCMenuItemSpriteExtra::create(
+                saveSprite,
+                this,
+                menu_selector(
+                    CubeChancePopup::onSave
+                )
+            );
+
+        saveButton->setID("save-button");
+
+        m_buttonMenu->addChildAtPosition(
+            saveButton,
+            Anchor::Bottom,
+            ccp(-75.f, 18.f)
+        );
+
+        auto saveRollSprite = ButtonSprite::create(
+            "Save + Roll"
+        );
+
+        auto saveRollButton =
+            CCMenuItemSpriteExtra::create(
+                saveRollSprite,
+                this,
+                menu_selector(
+                    CubeChancePopup::onSaveAndRandomize
+                )
+            );
+
+        saveRollButton->setID(
+            "save-roll-button"
+        );
+
+        m_buttonMenu->addChildAtPosition(
+            saveRollButton,
+            Anchor::Bottom,
+            ccp(75.f, 18.f)
+        );
+
+        return true;
+    }
+
+    void createRow(int rowIndex) {
+        float y =
+            105.f -
+            static_cast<float>(rowIndex) * 43.f;
+
+        SelectorRow row;
+
+        row.custom = false;
+        row.index = static_cast<std::size_t>(
+            rowIndex
+        );
+
+        row.customNames =
+            icr::getMoreIconsCubes();
+
+        auto typeSprite =
+            ButtonSprite::create(
+                "Vanilla"
+            );
+
+        row.typeButton =
+            CCMenuItemSpriteExtra::create(
+                typeSprite,
+                this,
+                menu_selector(
+                    CubeChancePopup::onType
+                )
+            );
+
+        row.typeButton->setTag(rowIndex);
+
+        row.typeButton->setID(
+            fmt::format(
+                "type-button-{}",
+                rowIndex
+            )
+        );
+
+        m_buttonMenu->addChildAtPosition(
+            row.typeButton,
+            Anchor::Center,
+            ccp(-145.f, y)
+        );
+
+        auto leftSprite =
+            ButtonSprite::create(
+                "<"
+            );
+
+        auto leftButton =
+            CCMenuItemSpriteExtra::create(
+                leftSprite,
+                this,
+                menu_selector(
+                    CubeChancePopup::onLeft
+                )
+            );
+
+        leftButton->setTag(rowIndex);
+
+        leftButton->setID(
+            fmt::format(
+                "left-button-{}",
+                rowIndex
+            )
+        );
+
+        m_buttonMenu->addChildAtPosition(
+            leftButton,
+            Anchor::Center,
+            ccp(-82.f, y)
+        );
+
+        row.selected =
+            CCLabelBMFont::create(
+                "1",
+                "bigFont.fnt"
+            );
+
+        row.selected->setScale(0.42f);
+
+        m_mainLayer->addChildAtPosition(
+            row.selected,
+            Anchor::Center,
+            ccp(-20.f, y)
+        );
+
+        auto rightSprite =
+            ButtonSprite::create(
+                ">"
+            );
+
+        auto rightButton =
+            CCMenuItemSpriteExtra::create(
+                rightSprite,
+                this,
+                menu_selector(
+                    CubeChancePopup::onRight
+                )
+            );
+
+        rightButton->setTag(rowIndex);
+
+        rightButton->setID(
+            fmt::format(
+                "right-button-{}",
+                rowIndex
+            )
+        );
+
+        m_buttonMenu->addChildAtPosition(
+            rightButton,
+            Anchor::Center,
+            ccp(42.f, y)
+        );
+
+        row.chance =
+            TextInput::create(
+                70.f,
+                "Chance",
+                "bigFont.fnt"
+            );
+
+        row.chance->setLabel(
+            "Chance"
+        );
+
+        row.chance->setFilter(
+            "0123456789."
+        );
+
+        row.chance->setMaxCharCount(
+            12
+        );
+
+        row.chance->setString(
+            "1",
             false
         );
+
+        m_mainLayer->addChildAtPosition(
+            row.chance,
+            Anchor::Center,
+            ccp(125.f, y)
+        );
+
+        m_rows.push_back(
+            std::move(row)
+        );
+
+        refreshRow(rowIndex);
     }
 
-    void updateRow(
-        int rowIndex
-    ) {
+    std::string getChance(
+        SelectorRow const& row
+    ) const {
+        /*
+         * Geode v5 TextInput::getString() returns
+         * gd::string on Android.
+         *
+         * Explicitly convert it to std::string here.
+         */
+        return std::string(
+            row.chance->getString().c_str()
+        );
+    }
+
+    void refreshRow(int rowIndex) {
         if (
             rowIndex < 0 ||
-            rowIndex >= static_cast<int>(m_rows.size())
+            rowIndex >= static_cast<int>(
+                m_rows.size()
+            )
         ) {
             return;
         }
 
-        auto& row = m_rows[rowIndex];
+        auto& row =
+            m_rows[
+                static_cast<std::size_t>(rowIndex)
+            ];
+
+        auto typeSprite =
+            ButtonSprite::create(
+                row.custom
+                    ? "More Icons"
+                    : "Vanilla"
+            );
+
+        row.typeButton->setNormalImage(
+            typeSprite
+        );
 
         if (row.custom) {
-            auto names =
-                getCustomNames();
-
-            if (names.empty()) {
-                row.index = 0;
-
+            if (row.customNames.empty()) {
                 row.selected->setString(
                     "None"
                 );
-
                 return;
             }
 
-            if (row.index >= static_cast<int>(names.size()))
+            if (
+                row.index >=
+                row.customNames.size()
+            ) {
                 row.index = 0;
-
-            if (row.index < 0)
-                row.index =
-                    static_cast<int>(names.size()) - 1;
+            }
 
             row.selected->setString(
-                names[row.index].c_str()
-            );
-
-            row.selected->limitLabelWidth(
-                105.f,
-                0.32f
+                row.customNames[row.index]
+                    .c_str()
             );
         }
         else {
-            if (row.index < 0)
-                row.index = vanillaCount() - 1;
+            /*
+             * Geometry Dash has a large number of
+             * vanilla cubes. We keep the selector
+             * within a practical range.
+             */
+            constexpr std::size_t VANILLA_COUNT =
+                50;
 
-            if (row.index >= vanillaCount())
+            if (
+                row.index >= VANILLA_COUNT
+            ) {
                 row.index = 0;
+            }
 
             row.selected->setString(
                 std::to_string(
                     row.index + 1
                 ).c_str()
-            );
-        }
-
-        if (row.typeButton) {
-            auto sprite =
-                ButtonSprite::create(
-                    row.custom
-                        ? "More Icons"
-                        : "Vanilla"
-                );
-
-            row.typeButton->setNormalImage(
-                sprite
             );
         }
     }
@@ -408,453 +663,222 @@ class CubeChancePopup final : public geode::Popup {
     ) {
         if (
             rowIndex < 0 ||
-            rowIndex >= static_cast<int>(m_rows.size())
+            rowIndex >= static_cast<int>(
+                m_rows.size()
+            )
         ) {
             return;
         }
 
-        auto& row = m_rows[rowIndex];
+        auto& row =
+            m_rows[
+                static_cast<std::size_t>(rowIndex)
+            ];
 
-        int count = 0;
+        std::size_t count = 0;
 
         if (row.custom) {
-            count =
-                static_cast<int>(
-                    getCustomNames().size()
-                );
+            count = row.customNames.size();
         }
         else {
-            count = vanillaCount();
+            count = 50;
         }
 
-        if (count <= 0)
+        if (count == 0) {
             return;
+        }
 
-        row.index += direction;
+        if (direction > 0) {
+            row.index =
+                (row.index + 1) % count;
+        }
+        else {
+            if (row.index == 0) {
+                row.index = count - 1;
+            }
+            else {
+                --row.index;
+            }
+        }
 
-        if (row.index < 0)
-            row.index = count - 1;
-
-        if (row.index >= count)
-            row.index = 0;
-
-        updateRow(rowIndex);
+        refreshRow(rowIndex);
     }
 
-    void toggleType(
-        int rowIndex
-    ) {
+    void toggleType(int rowIndex) {
         if (
             rowIndex < 0 ||
-            rowIndex >= static_cast<int>(m_rows.size())
+            rowIndex >= static_cast<int>(
+                m_rows.size()
+            )
         ) {
             return;
         }
 
-        auto& row = m_rows[rowIndex];
-
-        double currentWeight = 0.0;
-
-        parseWeight(
-            row.chance->getString(),
-            currentWeight
-        );
+        auto& row =
+            m_rows[
+                static_cast<std::size_t>(rowIndex)
+            ];
 
         row.custom = !row.custom;
         row.index = 0;
 
-        updateRow(rowIndex);
+        if (row.custom) {
+            row.customNames =
+                icr::getMoreIconsCubes();
+        }
 
-        auto newWeight =
-            findWeight(
-                row.custom,
-                row.index
-            );
-
-        if (newWeight > 0.0)
-            setChanceText(
-                row.chance,
-                newWeight
-            );
-        else
-            setChanceText(
-                row.chance,
-                currentWeight
-            );
+        refreshRow(rowIndex);
     }
 
-    std::string buildPool() {
+    std::string buildPool() const {
         std::string pool;
 
-        auto add = [&](std::string const& value) {
-            if (!pool.empty())
-                pool += ",";
+        for (
+            std::size_t i = 0;
+            i < m_rows.size();
+            ++i
+        ) {
+            auto const& row = m_rows[i];
 
-            pool += value;
-        };
+            std::string chance =
+                getChance(row);
 
-        auto customNames =
-            getCustomNames();
-
-        for (auto const& row : m_rows) {
-            double weight = 0.0;
-
-            if (
-                !parseWeight(
-                    row.chance->getString(),
-                    weight
-                )
-            ) {
+            if (chance.empty()) {
                 continue;
             }
 
-            if (weight <= 0.0)
-                continue;
+            if (!pool.empty()) {
+                pool += ",";
+            }
 
             if (row.custom) {
                 if (
-                    row.index < 0 ||
+                    row.customNames.empty() ||
                     row.index >=
-                        static_cast<int>(
-                            customNames.size()
-                        )
+                        row.customNames.size()
                 ) {
                     continue;
                 }
 
-                add(
+                /*
+                 * IMPORTANT:
+                 * chance is already std::string,
+                 * avoiding gd::string + std::string
+                 * compilation errors on Android.
+                 */
+                pool +=
                     "custom:" +
-                    customNames[row.index] +
+                    row.customNames[row.index] +
                     "=" +
-                    row.chance->getString()
-                );
+                    chance;
             }
             else {
-                add(
+                /*
+                 * IMPORTANT:
+                 * std::string conversion of
+                 * TextInput::getString() happens
+                 * before this concatenation.
+                 */
+                pool +=
                     "vanilla:" +
                     std::to_string(
                         row.index + 1
                     ) +
                     "=" +
-                    row.chance->getString()
-                );
+                    chance;
             }
         }
 
         return pool;
     }
 
-    void createArrow(
-        int rowIndex,
-        int direction,
-        float x,
-        float y
-    ) {
-        auto sprite =
-            ButtonSprite::create(
-                direction < 0
-                    ? "◂"
-                    : "▸"
+    void onType(CCObject* sender) {
+        auto item =
+            static_cast<CCMenuItemSpriteExtra*>(
+                sender
             );
-
-        auto button =
-            CCMenuItemSpriteExtra::create(
-                sprite,
-                this,
-                menu_selector(
-                    CubeChancePopup::onArrow
-                )
-            );
-
-        button->setTag(
-            rowIndex * 2 +
-            (direction > 0 ? 1 : 0)
-        );
-
-        m_buttonMenu->addChildAtPosition(
-            button,
-            Anchor::Center,
-            ccp(x, y)
-        );
-    }
-
-protected:
-    bool setup(
-        std::string const&
-    ) {
-        this->setTitle(
-            "Cube Chances"
-        );
-
-        auto pool =
-            Mod::get()->getSettingValue<std::string>(
-                "pool"
-            );
-
-        m_existing =
-            icr::parsePool(pool);
-
-        auto info =
-            CCLabelBMFont::create(
-                "Set the chance for each slot",
-                "goldFont.fnt"
-            );
-
-        info->setScale(0.36f);
-
-        m_mainLayer->addChildAtPosition(
-            info,
-            Anchor::Top,
-            ccp(0, -32)
-        );
-
-        constexpr float startY = 62.f;
-        constexpr float rowGap = 47.f;
-
-        for (int i = 0; i < ROW_COUNT; ++i) {
-            float y =
-                startY -
-                static_cast<float>(i) *
-                    rowGap;
-
-            auto& row =
-                m_rows.emplace_back();
-
-            row.custom = false;
-            row.index = i;
-
-            auto typeSprite =
-                ButtonSprite::create(
-                    "Vanilla"
-                );
-
-            row.typeButton =
-                CCMenuItemSpriteExtra::create(
-                    typeSprite,
-                    this,
-                    menu_selector(
-                        CubeChancePopup::onType
-                    )
-                );
-
-            row.typeButton->setTag(i);
-
-            m_buttonMenu->addChildAtPosition(
-                row.typeButton,
-                Anchor::Center,
-                ccp(-120, y)
-            );
-
-            auto leftSprite =
-                ButtonSprite::create(
-                    "◂"
-                );
-
-            auto left =
-                CCMenuItemSpriteExtra::create(
-                    leftSprite,
-                    this,
-                    menu_selector(
-                        CubeChancePopup::onArrow
-                    )
-                );
-
-            left->setTag(
-                i * 2
-            );
-
-            m_buttonMenu->addChildAtPosition(
-                left,
-                Anchor::Center,
-                ccp(-53, y)
-            );
-
-            auto selected =
-                CCLabelBMFont::create(
-                    "1",
-                    "bigFont.fnt"
-                );
-
-            selected->setScale(0.34f);
-
-            row.selected =
-                selected;
-
-            m_mainLayer->addChildAtPosition(
-                selected,
-                Anchor::Center,
-                ccp(-20, y)
-            );
-
-            auto rightSprite =
-                ButtonSprite::create(
-                    "▸"
-                );
-
-            auto right =
-                CCMenuItemSpriteExtra::create(
-                    rightSprite,
-                    this,
-                    menu_selector(
-                        CubeChancePopup::onArrow
-                    )
-                );
-
-            right->setTag(
-                i * 2 + 1
-            );
-
-            m_buttonMenu->addChildAtPosition(
-                right,
-                Anchor::Center,
-                ccp(15, y)
-            );
-
-            auto chanceLabel =
-                CCLabelBMFont::create(
-                    "Chance:",
-                    "bigFont.fnt"
-                );
-
-            chanceLabel->setScale(
-                0.30f
-            );
-
-            m_mainLayer->addChildAtPosition(
-                chanceLabel,
-                Anchor::Center,
-                ccp(68, y)
-            );
-
-            row.chance =
-                TextInput::create(
-                    60.f,
-                    "0",
-                    "bigFont.fnt"
-                );
-
-            row.chance->setLabel(
-                ""
-            );
-
-            row.chance->setMaxCharCount(
-                12
-            );
-
-            auto existing =
-                findWeight(
-                    row.custom,
-                    row.index
-                );
-
-            setChanceText(
-                row.chance,
-                existing
-            );
-
-            m_mainLayer->addChildAtPosition(
-                row.chance,
-                Anchor::Center,
-                ccp(123, y)
-            );
-
-            updateRow(i);
-        }
-
-        auto saveSprite =
-            ButtonSprite::create(
-                "Save"
-            );
-
-        auto save =
-            CCMenuItemSpriteExtra::create(
-                saveSprite,
-                this,
-                menu_selector(
-                    CubeChancePopup::onSave
-                )
-            );
-
-        m_buttonMenu->addChildAtPosition(
-            save,
-            Anchor::Bottom,
-            ccp(-70, 17)
-        );
-
-        auto rollSprite =
-            ButtonSprite::create(
-                "Save + Roll"
-            );
-
-        auto roll =
-            CCMenuItemSpriteExtra::create(
-                rollSprite,
-                this,
-                menu_selector(
-                    CubeChancePopup::onSaveAndRoll
-                )
-            );
-
-        m_buttonMenu->addChildAtPosition(
-            roll,
-            Anchor::Bottom,
-            ccp(70, 17)
-        );
-
-        return true;
-    }
-
-    void onArrow(
-        CCObject* sender
-    ) {
-        auto button =
-            static_cast<CCNode*>(sender);
-
-        int tag =
-            button->getTag();
-
-        int row =
-            tag / 2;
-
-        int direction =
-            tag % 2 == 0
-                ? -1
-                : 1;
-
-        cycleRow(
-            row,
-            direction
-        );
-    }
-
-    void onType(
-        CCObject* sender
-    ) {
-        auto button =
-            static_cast<CCNode*>(sender);
 
         toggleType(
-            button->getTag()
+            item->getTag()
         );
     }
 
-    void onSave(
-        CCObject*
-    ) {
-        icr::savePool(
-            buildPool()
+    void onLeft(CCObject* sender) {
+        auto item =
+            static_cast<CCMenuItemSpriteExtra*>(
+                sender
+            );
+
+        cycleRow(
+            item->getTag(),
+            -1
         );
+    }
+
+    void onRight(CCObject* sender) {
+        auto item =
+            static_cast<CCMenuItemSpriteExtra*>(
+                sender
+            );
+
+        cycleRow(
+            item->getTag(),
+            1
+        );
+    }
+
+    void onSave(CCObject*) {
+        auto pool =
+            buildPool();
+
+        if (pool.empty()) {
+            FLAlertLayer::create(
+                "Icon Chance Randomizer",
+                "No valid icon entries were entered.",
+                "OK"
+            )->show();
+
+            return;
+        }
+
+        icr::savePool(
+            pool
+        );
+
+        if (
+            Mod::get()->getSettingValue<bool>(
+                "debug"
+            )
+        ) {
+            log::info(
+                "ICR: saved pool '{}'",
+                pool
+            );
+        }
 
         this->onClose(
             nullptr
         );
     }
 
-    void onSaveAndRoll(
+    void onSaveAndRandomize(
         CCObject*
     ) {
+        auto pool =
+            buildPool();
+
+        if (pool.empty()) {
+            FLAlertLayer::create(
+                "Icon Chance Randomizer",
+                "No valid icon entries were entered.",
+                "OK"
+            )->show();
+
+            return;
+        }
+
         icr::savePool(
-            buildPool()
+            pool
         );
 
         icr::randomize();
@@ -872,7 +896,7 @@ public:
         if (
             ret &&
             ret->init(
-                420.f,
+                480.f,
                 330.f,
                 "GJ_square01.png"
             )
@@ -890,6 +914,7 @@ public:
         }
 
         delete ret;
+
         return nullptr;
     }
 };
@@ -899,22 +924,31 @@ class $modify(
     IconChanceGarageLayer,
     GJGarageLayer
 ) {
+
     bool init() {
-        if (
-            !GJGarageLayer::init()
-        )
+        if (!GJGarageLayer::init()) {
             return false;
+        }
 
         auto menu =
-            this->getChildByIDRecursive(
+            getChildByIDRecursive(
                 "shards-menu"
             );
 
-        if (!menu)
+        if (!menu) {
             menu =
-                this->getChildByIDRecursive(
+                getChildByIDRecursive(
                     "player-menu"
                 );
+        }
+
+        if (!menu) {
+            log::warn(
+                "ICR: could not find garage menu"
+            );
+
+            return true;
+        }
 
         auto buttonSprite =
             ButtonSprite::create(
@@ -926,30 +960,34 @@ class $modify(
                 buttonSprite,
                 this,
                 menu_selector(
-                    IconChanceGarageLayer::openChances
+                    IconChanceGarageLayer::onOpenChances
                 )
             );
 
         button->setID(
-            "icon-chance-button"
+            "icon-chance-randomizer-button"
         );
 
-        if (menu) {
-            static_cast<CCMenu*>(menu)
-                ->addChild(button);
+        static_cast<CCMenu*>(
+            menu
+        )->addChild(
+            button
+        );
 
-            static_cast<CCMenu*>(menu)
-                ->updateLayout();
-        }
+        static_cast<CCMenu*>(
+            menu
+        )->updateLayout();
 
         return true;
     }
 
-    void openChances(
-        CCObject*
-    ) {
-        CubeChancePopup::create()
-            ->show();
+    void onOpenChances(CCObject*) {
+        auto popup =
+            CubeChancePopup::create();
+
+        if (popup) {
+            popup->show();
+        }
     }
 };
 
@@ -958,6 +996,7 @@ class $modify(
     IconChancePlayLayer,
     PlayLayer
 ) {
+
     bool init(
         GJGameLevel* level,
         bool useReplay,
