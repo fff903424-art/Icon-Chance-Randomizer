@@ -242,39 +242,15 @@ public:
     }
 };
 
-class $modify(IconChanceGarageLayer, GJGarageLayer) {
-    bool init() {
-        if (!GJGarageLayer::init()) return false;
-
-        auto buttonSprite = ButtonSprite::create("Cube Chances");
-        buttonSprite->setScale(0.55f);
-        auto button = CCMenuItemSpriteExtra::create(
-            buttonSprite,
-            this,
-            menu_selector(IconChanceGarageLayer::openCubeChances)
-        );
-        button->setID("icon-chance-randomizer/cube-chances");
-
-        auto menu = CCMenu::create();
-        menu->setID("icon-chance-randomizer/menu");
-        menu->addChild(button);
-        menu->setPosition(ccp(65.f, 42.f));
-        this->addChild(menu);
-        return true;
-    }
-
-    void openCubeChances(CCObject*) {
-        CubeChancePopup::create()->show();
-    }
-};
-
 class $modify(IconChancePlayLayer, PlayLayer) {
-    bool init(GJGameLevel* level, bool useReplay) {
-        if (!PlayLayer::init(level, useReplay)) return false;
+    bool init(GJGameLevel* level, bool useReplay, bool dontCreateObjects) {
+        if (!PlayLayer::init(level, useReplay, dontCreateObjects))
+            return false;
 
         if (Mod::get()->getSettingValue<bool>("randomize_on_restart")) {
             icr::randomize();
         }
+
         return true;
     }
 };
