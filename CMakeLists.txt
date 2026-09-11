@@ -1,12 +1,23 @@
 cmake_minimum_required(VERSION 3.21)
-project(IconChanceRandomizer VERSION 1.0.0 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
-set(CMAKE_CXX_EXTENSIONS OFF)
 
-find_package(Geode REQUIRED)
+project(IconChanceRandomizer VERSION 1.0.0)
 
-add_geode_mod(${PROJECT_NAME}
-    src/main.cpp
+if (NOT DEFINED ENV{GEODE_SDK})
+    message(FATAL_ERROR "GEODE_SDK environment variable is not set")
+endif()
+
+add_subdirectory(
+    $ENV{GEODE_SDK}
+    ${CMAKE_CURRENT_BINARY_DIR}/geode
 )
+
+file(GLOB_RECURSE SOURCES CONFIGURE_DEPENDS
+    src/*.cpp
+)
+
+add_library(${PROJECT_NAME} SHARED ${SOURCES})
+
+setup_geode_mod(${PROJECT_NAME})
