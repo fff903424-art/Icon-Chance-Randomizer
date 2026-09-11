@@ -37,15 +37,6 @@ custom:MyCube=40
 
 The `NAME` must be the More Icons icon name. The mod checks that the custom icon exists before adding it to the random pool.
 
-## Build on GitHub
-
-1. Create a GitHub repository.
-2. Upload the contents of this folder to the repository root.
-3. Open **Actions**.
-4. The Android64 workflow builds the `.geode` package and uploads it as a workflow artifact.
-
-The workflow uses Geode's official `geode-sdk/build-geode-mod` action with `sdk: given`, so the exact SDK version in `mod.json` is used.
-
 ## Dependencies
 
 - Geode **v5.10.1**
