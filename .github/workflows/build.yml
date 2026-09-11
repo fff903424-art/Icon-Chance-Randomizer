@@ -1,0 +1,32 @@
+name: Build Geode mod
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  build-android64:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Build Android64
+        id: build
+        uses: geode-sdk/build-geode-mod@main
+        with:
+          sdk: given
+          target: Android64
+          build-config: Release
+          export-debug: false
+          export-symbols: false
+          use-lto: true
+
+      - name: Upload .geode
+        uses: actions/upload-artifact@v4
+        with:
+          name: icon-chance-randomizer-android64
+          path: ${{ steps.build.outputs.build-output }}
+
