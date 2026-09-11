@@ -12,7 +12,7 @@
   "developer": "Pan5430",
   "description": "Weighted cube randomization with More Icons support.",
   "links": {
-    "source": "https://github.com/Pan5430/Icon-Chance-Randomizer"
+    "source": "https://github.com/fff903424-art/Icon-Chance-Randomizer"
   },
   "license": "MIT",
   "tags": [
@@ -22,7 +22,7 @@
   ],
   "dependencies": {
     "hiimjustin000.more_icons": {
-      "version": "=v2.1.3",
+      "version": ">=v2.1.3",
       "required": true
     }
   },
@@ -50,7 +50,7 @@
       "description": "Write parsed pool entries and invalid icons to the Geode log.",
       "type": "bool",
       "default": false
-    }
-  },
-  "issues": "https://github.com/Pan5430/icon-chance-randomizer/issues"
+    },
+"issues": {
+  "url": "https://github.com/fff903424-art/Icon-Chance-Randomizer/issues"
 }
