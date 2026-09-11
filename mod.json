@@ -50,7 +50,9 @@
       "description": "Write parsed pool entries and invalid icons to the Geode log.",
       "type": "bool",
       "default": false
-    },
-"issues": {
-  "url": "https://github.com/fff903424-art/Icon-Chance-Randomizer/issues"
+    }
+  },
+  "issues": {
+    "url": "https://github.com/fff903424-art/Icon-Chance-Randomizer/issues"
+  }
 }
