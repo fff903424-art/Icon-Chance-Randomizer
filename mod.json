@@ -1,18 +1,18 @@
 {
-  "geode": "v5.10.1",
+  "geode": "5.10.1",
   "gd": {
     "android": "2.2081",
     "win": "2.2081",
     "mac": "2.2081",
     "ios": "2.2081"
   },
-  "id": "pan5430.icon-chance-randomizer",
+  "id": "pan.icon-chance-randomizer",
   "name": "Icon Chance Randomizer",
   "version": "v1.0.0",
   "developer": "Pan5430",
   "description": "Weighted cube randomization with More Icons support.",
   "links": {
-    "source": "https://github.com/Pan5430/icon-chance-randomizer"
+    "source": "https://github.com/Pan5430/Icon-Chance-Randomizer"
   },
   "license": "MIT",
   "tags": [
